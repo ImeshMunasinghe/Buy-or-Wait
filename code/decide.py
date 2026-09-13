@@ -150,7 +150,7 @@ def decide(ctx, req, opts):
             "affordability_status": best["status"], "recommended_payment_method": best["method"],
             "payment_plan": "|".join("%s:%s" % (fmt_d(d), loader.fmt_amt(a)) for d, a in best["payments"]),
             "earliest_date_for_full_payment": fmt_d(best["earliest"]) if best.get("earliest") else "",
-            "spending_changes_needed": ", ".join(
+            "spending_changes_needed": "|".join(
                 ("stop:%s" % e) if k == "stop" else ("reduce_to:%s:%s" % (e, loader.fmt_amt(a)))
                 for k, e, a in best["changes"]) or "none",
             "decision_explanation": explanation(ctx, req, best, safe, best.get("earliest"))}
