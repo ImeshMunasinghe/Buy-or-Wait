@@ -1,5 +1,7 @@
 # HackerRank Orchestrate
 
+> **Submission for the HackerRank Orchestrate 24-hour hackathon (September 2026).** Built by Imesh Munasinghe.
+
 Starter repository for the **HackerRank Orchestrate** 24-hour hackathon (September 2026).
 
 ## Buy or Wait?
