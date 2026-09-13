@@ -242,7 +242,10 @@ def load_dataset(dataset_dir):
                 ctx.salary_streams.append({"day": day, "amount": min(amts),
                                            "desc": desc, "overrides": [],
                                            "stop_after": None})
-        # scheduled/pending income: if same day as existing stream, update amount (newer info);
+        # Apply message-confirmed salary overrides to all streams
+        for s in ctx.salary_streams:
+            for eff, new_amt in sorted(s.get("overrides", [])):
+                s["amount"] = new_amt
         # else treat as one-off credit
         sched_inc = [n for n in norm if n["dir"] == "credit" and n["type"] == "income"
                      and n["status"] in ("scheduled", "pending")]
@@ -254,6 +257,8 @@ def load_dataset(dataset_dir):
                     matched = True
             if not matched:
                 ctx.extra_credits.append((n["date"], n["amount"]))
+
+        # recurring monthly expenses
 
         # recurring monthly expenses
         deb = [n for n in settled if n["dir"] == "debit"]
@@ -279,7 +284,7 @@ def load_dataset(dataset_dir):
                                   "flex": last["flex"]})
 
         monthly_groups = monthly_keys
-        var = [(n["date"], n["amount"]) for n in deb if (n["cat"], n["desc"]) not in monthly_groups]
+        var = [(n["date"], n["cat"], n["amount"]) for n in deb if (n["cat"], n["desc"]) not in monthly_groups]
         ctx.settled_debits = var
 
         for n in pending:

@@ -1,18 +1,10 @@
-﻿from datetime import date, timedelta
+from datetime import date, timedelta
 from calendar import monthrange
 import loader
 import forecast as F
 
 def var_daily_rate(ctx, request_date):
-    first = date(request_date.year, request_date.month, 1)
-    months = []
-    for i in (1, 2, 3):
-        mm = F.add_months(first, -i)
-        months.append((mm.year, mm.month))
-    total = sum(a for d, a in ctx.settled_debits if (d.year, d.month) in months)
-    if total <= 0: return 0.0
-    return total / (30.44 * 3)
-
+    return 0.0
 def fmt_d(d): return d.isoformat()
 
 class Req:
@@ -75,7 +67,7 @@ def build_candidates(ctx, req, opts, changes):
             for o in opts:
                 pm = o["payment_method"].strip()
                 if pm != "installments": continue
-                n = int(o["num_payments"])
+                n = int(o["number_of_payments"])
                 if ctx.max_installment_months and n > ctx.max_installment_months: continue
                 first_pay = loader.pdate(o["first_payment_date"])
                 freq = int(o["payment_frequency_days"])
@@ -89,7 +81,7 @@ def build_candidates(ctx, req, opts, changes):
                 cands.append({"kind": "install", "method": "installments",
                               "status": "affordable_with_plan", "safe": safe,
                               "payments": payments, "cost": total, "changes": list(changes),
-                              "complete": last, "start": first_pay, "opt": o["option_id"],
+                              "complete": last, "start": first_pay, "opt": o["payment_option_id"],
                               "earliest": F.earliest_full_date(proj, rd, minb, A, 180)})
     return cands
 
@@ -195,4 +187,4 @@ def explanation(ctx, req, best, safe, t):
             "%s %s and completes by %s, adding %s in financing cost." %
             (best["opt"], len(best["payments"]), hm, loader.fmt_amt(best["payments"][0][1]),
              fmt_d(best["start"]), hm, loader.fmt_amt(ctx.min_balance), fmt_d(best["complete"]),
-             hm, loader.fmt_amt(max(0.0, best["cost"] - req.amount))))
+             loader.fmt_amt(max(0.0, best["cost"] - req.amount))))

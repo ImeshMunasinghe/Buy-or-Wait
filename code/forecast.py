@@ -1,4 +1,4 @@
-﻿from datetime import date, timedelta
+from datetime import date, timedelta
 from calendar import monthrange
 
 def add_months(d, months):
