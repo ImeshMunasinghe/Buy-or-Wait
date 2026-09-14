@@ -27,11 +27,13 @@ def build_candidates(ctx, req, opts, changes):
     minb = ctx.min_balance
     ctx.var_daily_rate = var_daily_rate(ctx, rd)
     flows = F.build_flows(ctx, rd, changes)
-    proj = F.project(flows, ctx.balance, rd)
-    horizon = rd + timedelta(days=180)
     deadline = req.deadline or (rd + timedelta(days=90))
+    horizon = rd + timedelta(days=180)
+    # window for earliest_full_date capped to deadline so we don't recommend
+    # 'wait' beyond the deadline
+    window = max(0, (deadline - rd).days)
     cands = []
-    safe = F.safe_amount(proj, rd, minb, A)
+    safe = F.safe_amount(flows, ctx.balance, rd, minb, A)
     eps = 1e-6
     def pay_ok(payments):
         sim = F.simulate(flows, ctx.balance, rd, payments)
@@ -44,25 +46,32 @@ def build_candidates(ctx, req, opts, changes):
         return True
     if A > 0 and safe >= A - eps:
         if pay_ok([(rd, A)]):
-            cands.append({"kind": "full", "method": "full_payment", "status": "affordable_now",
+            # If spending changes were required, status is affordable_with_plan
+            status = "affordable_with_plan" if changes else "affordable_now"
+            cands.append({"kind": "full", "method": "full_payment", "status": status,
                           "safe": safe, "payments": [(rd, A)], "cost": A, "changes": list(changes),
                           "complete": rd, "start": rd, "opt": "", "earliest": rd})
     if A > 0:
         if "full_payment" in ctx.methods:
-            t = F.earliest_full_date(proj, rd, minb, A, 180)
+            t = F.earliest_full_date(flows, ctx.balance, rd, minb, A, window)
             if t and t <= deadline and t <= horizon and pay_ok([(t, A)]):
-                cands.append({"kind": "wait", "method": "wait", "status": "affordable_later",
+                status = "affordable_with_plan" if changes else "affordable_later"
+                # only emit 'wait' candidate if payment is NOT today (today == full_payment)
+                kind = "full" if t == rd else "wait"
+                method = "full_payment" if t == rd else "wait"
+                cands.append({"kind": kind, "method": method, "status": status,
                               "safe": safe, "payments": [(t, A)], "cost": A, "changes": list(changes),
                               "complete": t, "start": t, "opt": "", "earliest": t})
         if req.allows_partial and "partial_payment" in ctx.methods and 0 < safe < A - eps:
             rest = A - safe
-            t = F.earliest_full_date(proj, rd + timedelta(days=1), minb, rest, 180)
+            t = F.earliest_full_date(flows, ctx.balance, rd + timedelta(days=1), minb, rest, window)
             if t and t <= deadline and t <= horizon and pay_ok([(rd, safe), (t, rest)]):
+                ef = F.earliest_full_date(flows, ctx.balance, rd, minb, A, window) or t
                 cands.append({"kind": "partial", "method": "partial_payment",
                               "status": "affordable_with_plan", "safe": safe,
                               "payments": [(rd, safe), (t, rest)], "cost": A,
                               "changes": list(changes), "complete": t, "start": rd, "opt": "",
-                              "earliest": F.earliest_full_date(proj, rd, minb, A, 180) or t})
+                              "earliest": ef})
         if "installments" in ctx.methods:
             for o in opts:
                 pm = o["payment_method"].strip()
@@ -78,11 +87,12 @@ def build_candidates(ctx, req, opts, changes):
                 if last > deadline or last > horizon: continue
                 if not pay_ok(payments): continue
                 total = pmt_amt * n + fin_fee
+                ef = F.earliest_full_date(flows, ctx.balance, rd, minb, A, window)
                 cands.append({"kind": "install", "method": "installments",
                               "status": "affordable_with_plan", "safe": safe,
                               "payments": payments, "cost": total, "changes": list(changes),
                               "complete": last, "start": first_pay, "opt": o["payment_option_id"],
-                              "earliest": F.earliest_full_date(proj, rd, minb, A, 180)})
+                              "earliest": ef})
     return cands
 
 def key_cand(c, req):
@@ -95,8 +105,7 @@ def choose_spending_changes(ctx, req, opts):
     rd = req.rd
     ctx.var_daily_rate = var_daily_rate(ctx, rd)
     base_flows = F.build_flows(ctx, rd, [])
-    base_proj = F.project(base_flows, ctx.balance, rd)
-    safe = F.safe_amount(base_proj, rd, ctx.min_balance, A)
+    safe = F.safe_amount(base_flows, ctx.balance, rd, ctx.min_balance, A)
     if safe >= A - 1e-6:
         return [], build_candidates(ctx, req, opts, [])
     flex = []
@@ -130,11 +139,9 @@ def decide(ctx, req, opts):
     A = req.amount
     rd = req.rd
     minb = ctx.min_balance
-    deadline = req.deadline or (rd + timedelta(days=90))
     ctx.var_daily_rate = var_daily_rate(ctx, rd)
     flows = F.build_flows(ctx, rd, [])
-    proj = F.project(flows, ctx.balance, rd)
-    safe = F.safe_amount(proj, rd, minb, A)
+    safe = F.safe_amount(flows, ctx.balance, rd, minb, A)
     all_c = build_candidates(ctx, req, opts, [])
     changes, extra = choose_spending_changes(ctx, req, opts)
     all_c += extra
