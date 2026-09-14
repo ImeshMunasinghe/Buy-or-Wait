@@ -210,43 +210,55 @@ def load_dataset(dataset_dir):
                          "flex": e["flexibility"].strip(), "min_allowed": pfloat(e["minimum_allowed_amount"]),
                          "linked": e["linked_event_id"].strip()})
 
-        # reversed card-charge pairs net out: settled credit linked to an event
+        # reversed card-charge pairs net out: settled credit linked to an original debit.
+        # Only remove the original debit that was directly reversed — don't remove
+        # other events that happen to share a linked_event_id transitively.
         linked_credits = {n["linked"] for n in norm
                           if n["dir"] == "credit" and n["status"] == "settled" and n["linked"]}
         if linked_credits:
-            norm = [n for n in norm if n["id"] not in linked_credits
-                    and n["linked"] not in linked_credits]
+            norm = [n for n in norm if n["id"] not in linked_credits]
 
         settled = [n for n in norm if n["status"] == "settled"]
         pending = [n for n in norm if n["status"] in ("pending", "scheduled")]
 
-        # salary streams: group settled income by day-of-month
-        # stable income (salary) -> stream; variable income (commissions) -> one-off credits
+        # salary streams: only promote to recurring stream when:
+        #   - appears in ≥ 2 distinct calendar months
+        #   - appears ≥ 3 times total
+        #   - description does NOT contain non-monthly keywords (bonus, quarterly, weekly, etc.)
+        #   - all payments share the same description (not gig payouts with different platform names)
         inc = [n for n in settled if n["dir"] == "credit" and n["type"] == "income"]
-        byday = defaultdict(list)
+        NON_MONTHLY_KEYS = {"bonus", "quarterly", "annual", "dividend", "weekly", "task",
+                            "payout", "commission", "arrears", "advance", "incentive",
+                            "overtime", "reimbursement", "prize", "reward"}
+        sal_descs = {"salary", "wage", "paycheck", "gaji", "payroll", "pay", "household"}
+        # Group by (day-of-month, description) to keep distinct income sources separate
+        byday_desc = defaultdict(list)
         for n in inc:
-            byday[n["date"].day].append(n)
-        sal_descs = {"salary", "wage", "paycheck", "gaji", "payroll", "pay"}
-        for day, rows_ in byday.items():
+            byday_desc[(n["date"].day, n["desc"])].append(n)
+        for (day, desc), rows_ in byday_desc.items():
+            months = {(n["date"].year, n["date"].month) for n in rows_}
             amts = [n["amount"] for n in rows_]
-            mu = sum(amts) / len(amts)
-            desc = rows_[0]["desc"]
-            stable = (max(amts) - min(amts)) / mu < 0.25 if mu > 0 else False
-            is_sal = any(k in desc.lower() for k in sal_descs)
-            if stable or is_sal:
+            mu = sum(amts) / len(amts) if amts else 0.0
+            desc_low = desc.lower()
+            is_non_monthly = any(k in desc_low for k in NON_MONTHLY_KEYS)
+            is_sal = any(k in desc_low for k in sal_descs)
+            is_stream = (
+                len(months) >= 2        # must span ≥ 2 distinct months
+                and len(rows_) >= 3     # must have ≥ 3 occurrences
+                and not is_non_monthly  # no bonus/quarterly/payout keywords
+                and (is_sal or (mu > 0 and (max(amts) - min(amts)) / mu < 0.30))
+            )
+            if is_stream:
                 ctx.salary_streams.append({"day": day, "amount": mu,
                                            "desc": desc, "overrides": [],
                                            "stop_after": None})
-            else:
-                # variable income: use minimum as conservative recurring amount
-                ctx.salary_streams.append({"day": day, "amount": min(amts),
-                                           "desc": desc, "overrides": [],
-                                           "stop_after": None})
+            # Non-stream settled income: do NOT project forward.
+            # It already contributed to the current balance snapshot.
         # Apply message-confirmed salary overrides to all streams
         for s in ctx.salary_streams:
             for eff, new_amt in sorted(s.get("overrides", [])):
                 s["amount"] = new_amt
-        # else treat as one-off credit
+        # Scheduled/pending income: match to existing stream or add as one-off
         sched_inc = [n for n in norm if n["dir"] == "credit" and n["type"] == "income"
                      and n["status"] in ("scheduled", "pending")]
         for n in sched_inc:
@@ -286,6 +298,7 @@ def load_dataset(dataset_dir):
         monthly_groups = monthly_keys
         var = [(n["date"], n["cat"], n["amount"]) for n in deb if (n["cat"], n["desc"]) not in monthly_groups]
         ctx.settled_debits = var
+        ctx.var_monthly_estimate = 0.0  # not projected forward; balance already reflects history
 
         for n in pending:
             if n["dir"] == "debit" and n["amount"] > 0:
